@@ -1,0 +1,285 @@
+---
+title: Homework 1 submission 1
+format: 
+    pdf: 
+      echo: false
+      warning: false
+      message: false
+---
+
+```{r}
+library(tidyverse)
+library(ggplot2)
+library(scales)
+library(dplyr)
+library(fixest)
+data <- read_csv("../data/final_hcris_data.csv")
+```
+# Question 1: 
+How many hospitals filed more than one report in the same year? Show answer as a line graph of the number of hospitals over time.
+
+
+```{r}
+report_data <- data %>%
+    filter(year >= 2009 & year <= 2019) %>%
+    filter(source != "unique reports") %>%
+    group_by(year) %>%
+    summarize(count = n_distinct(provider_number))
+
+# line plot
+ggplot(report_data, aes(x= year, y=count)) +
+    geom_line() +
+    geom_point() +
+    scale_x_continuous(breaks = 2009:2019) + 
+    labs(
+        title = "Hospitals with more than One Report",
+        x = "Year",
+        y = "Number of Hospitals"
+    ) + 
+        theme_minimal()
+```
+
+# Question 2
+after removing/combining multiple reports, how many unique hospital IDs (Medicare provider numbers) exist in the data?
+
+```{r}
+unique_hospitals <- data %>%
+    filter(year >= 2009 & year <= 2019) %>%
+    summarize(unique_count = n_distinct(provider_number))
+
+print(paste("Total unique hospitas IDs", unique_hospitals$unique_count))
+```
+
+```{r}
+unique_hospitalsyr <- data %>%
+    filter(year >= 2009 & year <= 2019) %>%
+    group_by(year) %>%
+    summarize(hospitals = n_distinct(provider_number))
+
+unique_hospitalsyr
+```
+
+# Question 3
+What is the distribution of total charges (tot_charges) in each year? Show results in a violin plot with charges on the y-axis and years on the x-axis
+
+```{r}
+data_filter <- data %>%
+    filter(year >= 2009 & year <= 2019) %>%
+    filter(!is.na(tot_charges), tot_charges >0) 
+
+# violin plot
+ggplot(data_filter, aes(x = factor(year), y = tot_charges)) +
+    geom_violin() +
+    labs(
+        title = "Distribution of total hospital charges",
+        x = "fiscal year",
+        y = "total charges ($)"
+    ) +
+    theme_minimal()
+```
+
+# Question 4
+what is the distribution of estimated prices in each year? Present results with a violin plot (be sure to do something about outliers and/or negative prices in the data)
+
+```{r}
+data_filter4 <- data %>%
+    filter(year >= 2009 & year <= 2019) %>%
+    mutate(est_price = tot_operating_exp / tot_discharges) %>%
+    filter(is.finite(est_price), est_price > 1) %>%
+    group_by(year) %>%
+    mutate(
+        Q1 = quantile(est_price, 0.25),
+        Q3 = quantile(est_price, 0.75),
+        IQR = Q3 - Q1,
+        lower = Q1 - 1.5 * IQR,
+        upper = Q3 + 1.5 * IQR
+    ) %>%
+    filter(est_price >= lower & est_price <= upper) %>%
+    ungroup()
+
+# violin plot
+ggplot(data_filter4, aes(x = factor(year), y = est_price)) +
+    geom_violin() +
+    labs(
+        title = "Distribution of estiamted prices",
+        x = "fiscal year",
+        y = "estimated price ($)"
+    ) +
+    theme_minimal()
+```
+
+# Question 5
+What share of hospitals penalized under HRRP/VBP? Provide a graph showing the share of penalized hospitals from 2012-2019.
+
+```{r}
+penalty_data <- data %>%
+    filter(year >=2012 & year <= 2019) %>%
+    mutate(
+        hrrp_penalized = ifelse(!is.na(hrrp_payment) & hrrp_payment < 0, 1, 0),
+        vbp_penalized = ifelse(!is.na(hvbp_payment) & hvbp_payment < 0, 1, 0),
+        is_penalized = ifelse(hrrp_penalized == 1 | vbp_penalized == 1, 1, 0)
+    ) %>%
+    group_by(year) %>%
+    summarize(
+        total_hospitals = n_distinct(provider_number),
+        penalized_count = sum(is_penalized, na.rm = TRUE),
+        share_penalized = penalized_count / total_hospitals
+    )
+
+# plot
+ggplot(penalty_data, aes(x = year, y = share_penalized)) +
+  geom_line() +
+  geom_point() +
+  scale_y_continuous(labels = scales::label_percent(), limits = c(0, 0.5)) + 
+  scale_x_continuous(breaks = 2012:2019) +
+  labs(
+    title = "Share of Hospitals Penalized (HRRP/VBP)",
+    x = "Fiscal Year",
+    y = "Share of Penalized Hospitals (%)"
+  ) +
+  theme_minimal()
+```
+
+```{r}
+penalty_summary <- data %>%
+  filter(year >= 2012 & year <= 2019) %>%
+  mutate(
+    is_hrrp_pen = ifelse(!is.na(hrrp_payment) & hrrp_payment > 0, 1, 0),
+    is_hvbp_pen = ifelse(!is.na(hvbp_payment) & hvbp_payment > 0, 1, 0),
+    is_penalized = ifelse(is_hrrp_pen == 1 | is_hvbp_pen == 1, 1, 0)
+  ) %>%
+  group_by(year) %>%
+  summarize(
+    total_hospitals = n_distinct(provider_number),
+    penalized_count = sum(is_penalized, na.rm = TRUE),
+    share_penalized = penalized_count / total_hospitals
+  )
+
+# graph
+ggplot(penalty_summary, aes(x = year, y = share_penalized)) +
+  geom_line() +
+  geom_point() +
+  scale_y_continuous(labels = scales::label_percent()) + 
+  scale_x_continuous(breaks = 2012:2019) +
+  labs(
+    title = "Share of Hospitals Penalized under HRRP/VBP",
+    x = "Fiscal Year",
+    y = "Share of Penalized Hospitals (%)"
+  ) +
+  theme_minimal()
+```
+
+# Question 6 
+Provide a summary of OLS estimates of the effect of net penalties on price changes. Present your results in a table with three different specifications: 1) a “baseline” specification using only net penalty as a covariate; 2) “baseline” specification plus the pre-penalty (2009-2011) mean bed size; 3) “baseline” specification plus bed size plus pre-penalty (2009-2011) average Medicaid discharges.
+
+```{r}
+data_filter6 <- data %>%
+    mutate(
+        price_change = (tot_charges - lag(tot_charges)) / lag(tot_charges)
+    ) %>%
+    filter(!is.na(price_change))
+
+mod1 <- feols(price_change ~ hrrp_payment, data = data_filter6)
+mod2 <- feols(price_change ~ hrrp_payment + beds, data = data_filter6)
+mod3 <- feols(price_change ~ hrrp_payment + beds + mcaid_discharges, data = data_filter6)
+
+etable(mod1, mod2, mod3,
+       headers = c("Baseline", "with Bed size", "Full Model"),
+       tex = FALSE)
+```
+
+# Question 7
+Provide a scatterplot of net penalty against pre-2012 Medicare discharges.
+
+```{r}
+pre_penalty <- data %>%
+    filter(year < 2012) %>%
+    group_by(provider_number) %>%
+    summarize(pre_2012 = mean(mcare_discharges, na.rm = TRUE))
+
+penalty_data <- data %>%
+    filter(year >= 2012) %>%
+    mutate(net_penalty = hrrp_payment + hvbp_payment) %>%
+    select(provider_number, year, net_penalty)
+
+plot_data <- penalty_data %>%
+    left_join(pre_penalty, by = "provider_number") %>%
+    filter(!is.na(net_penalty), !is.na(pre_2012))
+
+ggplot(plot_data, aes(x = pre_2012, y = net_penalty)) +
+    geom_point() + 
+    geom_smooth(method = "lm", se = TRUE) +
+    labs(
+        title = "Net Penalty vs. Pre-2012 Medicare Discharges",
+        x = "Average Medicare Discharges",
+        y = "Net Penalty"
+    ) +
+    theme_minimal() +
+    scale_x_continuous(labels = scales::comma)+
+    scale_y_continuous(labels = scales::dollar)
+```
+
+# Question 8
+Provide a summary of the first stage and reduced-form results using pre-penalty Medicare discharges as an instrument for net penalties. Present your results in a table with three different specifications as in Question 6.
+
+```{r}
+prepenalty <- data %>%
+    filter(year >= 2009 & year <= 2011) %>%
+    group_by(provider_number) %>%
+    summarize(
+        pre_mcare_discharges = mean(mcare_discharges, na.rm = TRUE),
+        pre_bed_size = mean(beds, na.rm = TRUE),
+        pre_mcaid_discharges = mean(mcaid_discharges, na.rm = TRUE))
+
+data_filter8 <- data %>%
+    filter(year > 2011) %>%
+    mutate(
+        net_penalty = hrrp_payment + hvbp_payment, 
+        price_change = (tot_charges - lag(tot_charges)) / lag(tot_charges)
+    ) %>%
+    left_join(prepenalty, by = "provider_number") %>%
+    filter(!is.na(price_change), !is.na(pre_mcare_discharges))
+
+fs1 <- feols(net_penalty ~ pre_mcare_discharges, data = data_filter8)
+fs2 <- feols(net_penalty ~ pre_mcare_discharges + pre_bed_size, data = data_filter8)
+fs3 <- feols(net_penalty ~ pre_mcare_discharges + pre_bed_size + pre_mcaid_discharges, data = data_filter8)
+
+rf1 <- feols(price_change ~ pre_mcare_discharges, data = data_filter8)
+rf2 <- feols(price_change ~ pre_mcare_discharges + pre_bed_size, data = data_filter8)
+rf3 <- feols(price_change ~ pre_mcare_discharges + pre_bed_size + pre_mcaid_discharges, data = data_filter8)
+
+etable(fs1, fs2, fs3,
+       title = "First Stafe Results",
+       headers = c("Baseline", "with Bed Size", "with Medicaid"),
+       tex = FALSE)
+
+etable(rf1, rf2, rf3, 
+       title = "Reduced Form Results",
+       headers = c("Baseline", "with Bed Size", "with Medicaid"),
+       tex = FALSE)
+               
+```
+
+# Question 9
+Provide a summary of IV estimates of the effect of net penalties on price changes. Again present your results in a table with the three different specifications as in Questions 6 and 8.
+
+```{r}
+iv1 <- feols(price_change ~ 1 | net_penalty ~ pre_mcare_discharges,
+             data = data_filter8)
+iv2 <- feols(price_change ~ pre_bed_size | net_penalty ~ pre_mcare_discharges,
+             data = data_filter8)
+iv3 <- feols(price_change ~ pre_bed_size + pre_mcaid_discharges | net_penalty ~ pre_mcare_discharges,
+             data = data_filter8)
+
+etable(iv1, iv2, iv3,
+       title = "IV Estimates",
+       headers = c("Baseline", "with Bed Size", "Medicaid"),
+       fitstat = ~ r2 + n + wf,
+       tex = FALSE)
+```
+
+# Question 10
+Briefly explain the “Local” ATE in the context of your estimates. How might a local effect differ from an overall ATE in this setting?
+
+The local ATE refers to the effect of the penalties on price changes for the hospitals whose penalty status was changed by the pre-2012 medicare discharges. The ATE would be the impact of penalties on any hospital chosen randomly, local ATE is weighted towards larger Medicare-dependent hospitals.
+
